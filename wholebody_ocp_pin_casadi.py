@@ -45,15 +45,15 @@ T = 1.0  # 规划总时长 [s]
 N = 100  # 离散段数（状态点数为 N+1）
 INTEGRATOR = "euler"  # 离散积分方法：euler(默认) 或 rk4
 
-R = np.diag([0.1, 0.1, 0.1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])  # 运行代价中 u^T R u 的权重矩阵（9x9）
-W_EE_POS = 100.0  # 终端位置误差项权重（||e_pos||^2 前系数）
-W_EE_ORI = 10.0  # 终端姿态误差项权重（||e_ori||^2 前系数）
-W_BARRIER = 1.0  # 运行阶段屏障项总权重（L_B 前系数）
+R = np.diag([10.0, 10.0, 10.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])  # 运行代价中 u^T R u 的权重矩阵（9x9）
+W_EE_POS = 1000.0  # 终端位置误差项权重（||e_pos||^2 前系数）
+W_EE_ORI = 1000.0  # 终端姿态误差项权重（||e_ori||^2 前系数）
+W_BARRIER = 10.0  # 运行阶段屏障项总权重（L_B 前系数）
 
-X0 = np.array([0.40, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)  # 初始状态 [z,phi,theta,varphi1..6]
+X0 = np.array([0.30, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)  # 初始状态 [z,phi,theta,varphi1..6]
 
-BASE_X_MIN = np.array([0.30, -0.60, -0.60], dtype=float)  # base 状态下界 [z(m), phi(rad), theta(rad)]
-BASE_X_MAX = np.array([0.50,  0.60,  0.60], dtype=float)  # base 状态上界 [z(m), phi(rad), theta(rad)]
+BASE_X_MIN = np.array([0.30, -np.pi/6, -np.pi/6], dtype=float)  # base 状态下界 [z(m), phi(rad), theta(rad)]
+BASE_X_MAX = np.array([0.50,  np.pi/6,  np.pi/6], dtype=float)  # base 状态上界 [z(m), phi(rad), theta(rad)]
 
 BASE_U_MIN = np.array([-0.40, -1.20, -1.20], dtype=float)  # base 控制下界 [dot_z(m/s), dot_phi(rad/s), dot_theta(rad/s)]
 BASE_U_MAX = np.array([ 0.40,  1.20,  1.20], dtype=float)  # base 控制上界 [dot_z(m/s), dot_phi(rad/s), dot_theta(rad/s)]
@@ -64,16 +64,22 @@ DELTA_BASE = 1e-4  # base 相关 relaxed barrier 分段阈值 delta
 MU_ARM = 5e-3  # arm 相关 relaxed barrier 系数 mu
 DELTA_ARM = 1e-4  # arm 相关 relaxed barrier 分段阈值 delta
 
-P_GOAL = np.array([0.20, 0.10, 0.50], dtype=float)  # 末端目标位置 ^W p_goal [m]
+P_GOAL = np.array([0.20, 0.00, 0.80], dtype=float)  # 末端目标位置 ^W p_goal [m]
 Q_GOAL_WXYZ = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)  # 末端目标姿态四元数 [w,x,y,z]
 
 USE_QUAT_SIGN_CORRECTION = True  # 姿态误差计算时是否启用符号修正（dot(q,qhat)<0 时取 -qhat）
 PLOT_ERRORS = False  # 是否绘制误差随时间曲线（需 matplotlib）
 
 MUJOCO_VISUALIZE = True  # 是否在求解后使用 MuJoCo 播放优化轨迹
-MUJOCO_MODEL_PATH = "/home/wzx/WholeBodyRL_WS/RMPlus/Go2Arm_description/mjcf/piper_description_mjc_NoGripper.xml"  # MuJoCo 加载模型路径（可为 URDF 或 MJCF）
+MUJOCO_MODEL_PATH = "/home/wzx/WholeBodyRL_WS/RMPlus/Go2Arm_description/urdf/vis_piper_description_mjc_NoGripper.urdf"  # MuJoCo 加载模型路径（可为 URDF 或 MJCF）
 MUJOCO_LOOP = False  # 轨迹播放结束后是否循环播放
 MUJOCO_REALTIME_FACTOR = 0.1  # 播放速度倍率：1.0 实时，2.0 两倍速
+MUJOCO_ADD_ORIGIN_AXES = True  # 是否在 viewer 中显示世界原点坐标系
+MUJOCO_ORIGIN_AXIS_LENGTH = 0.25  # 原点坐标轴长度 [m]
+MUJOCO_ORIGIN_AXIS_WIDTH_PX = 4.0  # 原点坐标轴线宽 [pixel]
+MUJOCO_ADD_GOAL_AXES = True  # 是否在 viewer 中显示目标位姿坐标系（位于 P_GOAL）
+MUJOCO_GOAL_AXIS_LENGTH = 0.18  # 目标坐标轴长度 [m]
+MUJOCO_GOAL_AXIS_WIDTH_PX = 4.0  # 目标坐标轴线宽 [pixel]
 
 IPOPT_MAX_ITER = 1000  # IPOPT 最大迭代次数
 IPOPT_TOL = 1e-6  # IPOPT 收敛容差
@@ -527,11 +533,94 @@ def _prepare_mujoco_model_path(model_path: str):
     return prepared_urdf, tmp_dir
 
 
+def _add_origin_axes_to_viewer(viewer, mj, length: float = 0.25, width_px: float = 4.0) -> None:
+    """
+    Add a visual-only XYZ coordinate frame at world origin in viewer.user_scn.
+    X: red, Y: green, Z: blue.
+    """
+    if not hasattr(viewer, "user_scn"):
+        print("[warn] viewer has no user_scn; cannot draw origin axes.")
+        return
+
+    scn = viewer.user_scn
+    needed = 3
+    if scn.ngeom + needed > scn.maxgeom:
+        print("[warn] user_scn full; cannot add origin axes.")
+        return
+
+    origin = np.array([0.0, 0.0, 0.0], dtype=float)
+    ends = [
+        (np.array([length, 0.0, 0.0], dtype=float), np.array([1.0, 0.1, 0.1, 1.0], dtype=float)),  # X
+        (np.array([0.0, length, 0.0], dtype=float), np.array([0.1, 1.0, 0.1, 1.0], dtype=float)),  # Y
+        (np.array([0.0, 0.0, length], dtype=float), np.array([0.1, 0.3, 1.0, 1.0], dtype=float)),  # Z
+    ]
+
+    for p_to, rgba in ends:
+        geom = scn.geoms[scn.ngeom]
+        # Initialize visual attrs then overwrite geometry as connector line.
+        mj.mjv_initGeom(
+            geom,
+            mj.mjtGeom.mjGEOM_LINE,
+            np.array([1.0, 1.0, 1.0], dtype=float),
+            np.zeros(3, dtype=float),
+            np.eye(3, dtype=float).reshape(9),
+            rgba,
+        )
+        mj.mjv_connector(geom, mj.mjtGeom.mjGEOM_LINE, width_px, origin, p_to)
+        scn.ngeom += 1
+
+
+def _add_goal_axes_to_viewer(
+    viewer,
+    mj,
+    goal_xyz: np.ndarray,
+    goal_q_wxyz: np.ndarray,
+    length: float = 0.18,
+    width_px: float = 4.0,
+) -> None:
+    """
+    Add visual-only XYZ axes at goal pose in viewer.user_scn.
+    Axes orientation follows goal_q_wxyz (wxyz).
+    """
+    if not hasattr(viewer, "user_scn"):
+        print("[warn] viewer has no user_scn; cannot draw goal axes.")
+        return
+
+    scn = viewer.user_scn
+    needed = 3
+    if scn.ngeom + needed > scn.maxgeom:
+        print("[warn] user_scn full; cannot add goal axes.")
+        return
+
+    origin = np.array(goal_xyz, dtype=float).reshape(3)
+    R_goal = _quat_to_rotmat_wxyz_np(np.array(goal_q_wxyz, dtype=float).reshape(4))
+    ends = [
+        (origin + R_goal @ np.array([length, 0.0, 0.0], dtype=float), np.array([1.0, 0.2, 0.2, 1.0], dtype=float)),  # X
+        (origin + R_goal @ np.array([0.0, length, 0.0], dtype=float), np.array([0.2, 1.0, 0.2, 1.0], dtype=float)),  # Y
+        (origin + R_goal @ np.array([0.0, 0.0, length], dtype=float), np.array([0.2, 0.4, 1.0, 1.0], dtype=float)),  # Z
+    ]
+
+    for p_to, rgba in ends:
+        geom = scn.geoms[scn.ngeom]
+        mj.mjv_initGeom(
+            geom,
+            mj.mjtGeom.mjGEOM_LINE,
+            np.array([1.0, 1.0, 1.0], dtype=float),
+            np.zeros(3, dtype=float),
+            np.eye(3, dtype=float).reshape(9),
+            rgba,
+        )
+        mj.mjv_connector(geom, mj.mjtGeom.mjGEOM_LINE, width_px, origin, p_to)
+        scn.ngeom += 1
+
+
 def visualize_trajectory_mujoco(
     x_traj: np.ndarray,
     dt: float,
     model_path: str,
     arm_joint_names,
+    goal_point: np.ndarray | None = None,
+    goal_quat_wxyz: np.ndarray | None = None,
     loop: bool = False,
     realtime_factor: float = 1.0,
 ):
@@ -564,28 +653,60 @@ def visualize_trajectory_mujoco(
                 raise ValueError(f"Joint '{jn}' not found in MuJoCo model. Available joints: {available}")
             qpos_adrs.append(int(model.jnt_qposadr[jid]))
 
-        # Use body of first arm joint as movable root for virtual base z/phi/theta.
-        # Note: MuJoCo URDF importer may collapse fixed-link chain (e.g. base/base_link),
-        # so the runtime movable root body is often the first dynamic body (here typically link1).
-        root_joint_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_JOINT, arm_joint_names[0])
-        root_body_id = int(model.jnt_bodyid[root_joint_id])
-        root_pos_nom = np.array(model.body_pos[root_body_id], dtype=float)
-        root_quat_nom = np.array(model.body_quat[root_body_id], dtype=float)
-        base_body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, BASE_FRAME_NAME)
-        arm_base_body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, ARM_BASE_FRAME_NAME)
+        # Preferred mode: if URDF has explicit movable root joints, map x[0:3] directly to them.
+        root_joint_names = ["root_z", "root_roll", "root_pitch"]
+        root_joint_ids = [mj.mj_name2id(model, mj.mjtObj.mjOBJ_JOINT, n) for n in root_joint_names]
+        has_explicit_root_joints = all(jid >= 0 for jid in root_joint_ids)
 
-        print(
-            f"MuJoCo viewer: model='{model_file}', runtime_root_body='{mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, root_body_id)}', "
-            f"logical_base_frame='{BASE_FRAME_NAME}', logical_arm_base_frame='{ARM_BASE_FRAME_NAME}', "
-            f"frames={x_traj.shape[0]}, dt={dt:.6f}s"
-        )
-        if base_body_id < 0 or arm_base_body_id < 0:
+        if has_explicit_root_joints:
+            root_qpos_adrs = [int(model.jnt_qposadr[jid]) for jid in root_joint_ids]
             print(
-                "[INFO] MuJoCo URDF importer collapsed fixed-link frames (e.g. base/base_link). "
-                "Using first dynamic body as runtime root is expected."
+                f"MuJoCo viewer: model='{model_file}', root_joint_mode='explicit({','.join(root_joint_names)})', "
+                f"logical_base_frame='{BASE_FRAME_NAME}', logical_arm_base_frame='{ARM_BASE_FRAME_NAME}', "
+                f"frames={x_traj.shape[0]}, dt={dt:.6f}s"
             )
+        else:
+            # Fallback mode for fixed-base URDF:
+            # apply virtual base z/phi/theta to runtime root body transform.
+            root_joint_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_JOINT, arm_joint_names[0])
+            root_body_id = int(model.jnt_bodyid[root_joint_id])
+            root_pos_nom = np.array(model.body_pos[root_body_id], dtype=float)
+            root_quat_nom = np.array(model.body_quat[root_body_id], dtype=float)
+            base_body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, BASE_FRAME_NAME)
+            arm_base_body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, ARM_BASE_FRAME_NAME)
+            print(
+                f"MuJoCo viewer: model='{model_file}', runtime_root_body='{mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, root_body_id)}', "
+                f"logical_base_frame='{BASE_FRAME_NAME}', logical_arm_base_frame='{ARM_BASE_FRAME_NAME}', "
+                f"frames={x_traj.shape[0]}, dt={dt:.6f}s"
+            )
+            if base_body_id < 0 or arm_base_body_id < 0:
+                print(
+                    "[INFO] MuJoCo URDF importer collapsed fixed-link frames (e.g. base/base_link). "
+                    "Using first dynamic body as runtime root is expected."
+                )
+
+        goal_xyz = np.array(P_GOAL if goal_point is None else goal_point, dtype=float).reshape(3)
+        goal_q = np.array(Q_GOAL_WXYZ if goal_quat_wxyz is None else goal_quat_wxyz, dtype=float).reshape(4)
 
         with mj_viewer.launch_passive(model, data) as viewer:
+            if MUJOCO_ADD_ORIGIN_AXES:
+                with viewer.lock():
+                    _add_origin_axes_to_viewer(
+                        viewer,
+                        mj,
+                        length=MUJOCO_ORIGIN_AXIS_LENGTH,
+                        width_px=MUJOCO_ORIGIN_AXIS_WIDTH_PX,
+                    )
+            if MUJOCO_ADD_GOAL_AXES:
+                with viewer.lock():
+                    _add_goal_axes_to_viewer(
+                        viewer,
+                        mj,
+                        goal_xyz=goal_xyz,
+                        goal_q_wxyz=goal_q,
+                        length=MUJOCO_GOAL_AXIS_LENGTH,
+                        width_px=MUJOCO_GOAL_AXIS_WIDTH_PX,
+                    )
             while viewer.is_running():
                 for k in range(x_traj.shape[0]):
                     if not viewer.is_running():
@@ -596,13 +717,19 @@ def visualize_trajectory_mujoco(
                     phi = float(x_traj[k, 1])
                     theta = float(x_traj[k, 2])
 
-                    q_base = _base_quat_wxyz_np(phi, theta)
-                    p_base = np.array([0.0, 0.0, z], dtype=float)
-                    R_base = _quat_to_rotmat_wxyz_np(q_base)
+                    if has_explicit_root_joints:
+                        # Directly write base DoFs to root joints: z, roll(phi), pitch(theta).
+                        data.qpos[root_qpos_adrs[0]] = z
+                        data.qpos[root_qpos_adrs[1]] = phi
+                        data.qpos[root_qpos_adrs[2]] = theta
+                    else:
+                        q_base = _base_quat_wxyz_np(phi, theta)
+                        p_base = np.array([0.0, 0.0, z], dtype=float)
+                        R_base = _quat_to_rotmat_wxyz_np(q_base)
 
-                    # Apply virtual base transform to root body.
-                    model.body_pos[root_body_id] = p_base + R_base @ root_pos_nom
-                    model.body_quat[root_body_id] = _quat_mul_wxyz_np(q_base, root_quat_nom)
+                        # Apply virtual base transform to fallback root body.
+                        model.body_pos[root_body_id] = p_base + R_base @ root_pos_nom
+                        model.body_quat[root_body_id] = _quat_mul_wxyz_np(q_base, root_quat_nom)
 
                     # Apply arm joint trajectory.
                     for j, qadr in enumerate(qpos_adrs):
@@ -859,6 +986,8 @@ def main():
                 dt=res["dt"],
                 model_path=MUJOCO_MODEL_PATH,
                 arm_joint_names=ARM_JOINT_NAMES,
+                goal_point=params.p_goal,
+                goal_quat_wxyz=params.q_goal_wxyz,
                 loop=MUJOCO_LOOP,
                 realtime_factor=MUJOCO_REALTIME_FACTOR,
             )
